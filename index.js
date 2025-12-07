@@ -1,9 +1,9 @@
-// index.js (CommonJS style)
-
 const express = require("express");
 const cors = require("cors");
-const { MongoClient, ServerApiVersion } = require("mongodb");
-require("dotenv").config(); // যদি তুমি .env ব্যবহার করো
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { log } = require("node:console");
+require("dotenv").config();
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
 
 const app = express();
 const PORT = 3000;
@@ -26,6 +26,194 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     await client.connect();
+    // add collections here
+    const db = client.db("garments-orders");
+    const usersCollection = db.collection("users");
+    const productCollection = db.collection("products");
+    const ordersCollection = db.collection("orders");
+
+    // app api here
+    // users apis
+    app.post("/users", async (req, res) => {
+      const userInfo = req.body;
+
+      const timeStamp = new Date();
+
+      const userInfoWithTimeStamps = {
+        ...userInfo,
+        createdAt: timeStamp,
+        updatedAt: timeStamp,
+      };
+      const result = await usersCollection.insertOne(userInfoWithTimeStamps);
+      res.send(result);
+    });
+    app.patch("/users/suspend/:id", async (req, res) => {
+      const id = req.params.id;
+      const updateInfo = req.body;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: updateInfo,
+      };
+      const result = await usersCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+    app.get("/users", async (req, res) => {
+      const result = await usersCollection.find().toArray();
+      res.send(result);
+    });
+
+    // products apis
+    app.get("/products", async (req, res) => {
+      const result = await productCollection.find().toArray();
+      res.send(result);
+    });
+    app.get("/products/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await productCollection.findOne(query);
+      res.send(result);
+    });
+
+    // orders apis
+
+    app.get("/products", async (req, res) => {
+      const userInfo = req.body;
+
+      const user = await usersCollection.findOne({ email: userInfo.email });
+      const userId = user._id;
+    });
+    app.post("/orders", async (req, res) => {
+      const userInfo = req.body;
+      userInfo.createdAt = new Date();
+      userInfo.status = "pending";
+
+      // check if product exists
+      const existing = await productCollection.findOne({
+        title: userInfo._id, // আপনি যে ফিল্ডটি unique রাখতে চান
+      });
+
+      if (existing) {
+        console.log(existing);
+
+        return res.status(409).send({
+          success: false,
+          message: "Product already exists",
+        });
+      }
+
+      const result = await ordersCollection.insertOne(userInfo);
+      res.send(result);
+    });
+
+    // payment related api stripe
+    app.post("/payment-checkout-session", async (req, res) => {
+      const paymentInfo = req.body;
+      const amount = parseInt(paymentInfo.orderPrice) * 100;
+      const session = await stripe.checkout.sessions.create({
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              unit_amount: amount,
+              product_data: {
+                name: `Please pay for: ${paymentInfo.productTitle}`,
+              },
+            },
+            quantity: paymentInfo.orderQuantity,
+          },
+        ],
+        mode: "payment",
+        metadata: {
+          productId: paymentInfo.productId,
+          email: paymentInfo.email,
+          orderQuantity: paymentInfo.orderQuantity,
+          orderPrice: paymentInfo.orderPrice,
+        },
+        customer_email: paymentInfo.email,
+        success_url: `${process.env.SITE_DOMAIN}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.SITE_DOMAIN}/payment-cancelled`,
+      });
+
+      res.send({ url: session.url });
+    });
+
+    // retrive payment info
+
+    // app.patch("/payment-success", async (req, res) => {
+    //   const sessionId = req.query.session_id;
+    //   const session = await stripe.checkout.sessions.retrieve(sessionId);
+    //   console.log(session);
+    //   if (session.payment_status === "paid") {
+    //     const id = session.metadata.productId;
+    //     const query = { _id: new ObjectId(id) };
+    //     const updateDoc = {
+    //       $set: {
+    //         paymentStatus: "paid",
+    //       },
+    //     };
+
+    //     const result = await productCollection.updateOne(query, updateDoc);
+    //     res.send(result);
+    //   }
+    // });
+
+    app.patch("/payment-success", async (req, res) => {
+      const sessionId = req.query.session_id;
+
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+      if (session.payment_status === "paid") {
+        // stripe metadata
+        const { productId, email, orderQuantity, orderPrice } =
+          session.metadata;
+
+        // 1. Create Order Object
+        const orderData = {
+          productId,
+          email,
+          orderQuantity: parseInt(orderQuantity),
+          orderPrice: parseFloat(orderPrice),
+          paymentMethod: "op",
+          paymentStatus: "paid",
+          createdAt: new Date(),
+        };
+
+        // check if product exists
+        const existing = await ordersCollection.findOne({
+          productId: productId, // আপনি যে ফিল্ডটি unique রাখতে চান
+        });
+
+        console.log(existing, email, productId);
+
+        if (existing) {
+          console.log(existing);
+
+          return res.status(409).send({
+            success: false,
+            message: "Product already exists",
+          });
+        }
+
+        // 2. Save to Orders Collection
+        const orderResult = await ordersCollection.insertOne(orderData);
+
+        // 3. (Optional) Update product collection
+        await productCollection.updateOne(
+          { _id: new ObjectId(productId) },
+          { $set: { paymentStatus: "paid" } }
+        );
+
+        res.send({
+          success: true,
+          message: "Payment success & order saved",
+          orderId: orderResult.insertedId,
+        });
+      } else {
+        res
+          .status(400)
+          .send({ success: false, message: "Payment not completed" });
+      }
+    });
 
     await client.db("admin").command({ ping: 1 });
     console.log(
