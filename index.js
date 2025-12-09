@@ -61,6 +61,16 @@ async function run() {
       const result = await usersCollection.find().toArray();
       res.send(result);
     });
+    app.get("/users/myProfile", async (req, res) => {
+      const email = req.query.email;
+
+      const query = {};
+      if (email) {
+        query.email = email;
+      }
+      const result = await usersCollection.findOne(query);
+      res.send(result);
+    });
 
     // products apis
     app.get("/products", async (req, res) => {
