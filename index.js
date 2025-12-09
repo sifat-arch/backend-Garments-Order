@@ -35,16 +35,31 @@ async function run() {
     // app api here
     // users apis
     app.post("/users", async (req, res) => {
-      const userInfo = req.body;
-
+      const { name, email, photoURL, role } = req.body;
       const timeStamp = new Date();
 
-      const userInfoWithTimeStamps = {
-        ...userInfo,
+      let userData = {
+        name,
+        email,
+        photoURL,
         createdAt: timeStamp,
         updatedAt: timeStamp,
       };
-      const result = await usersCollection.insertOne(userInfoWithTimeStamps);
+
+      if (role === "Buyer") {
+        userData.role = "buyer";
+        userData.status = "active";
+      } else if (role === "Manager") {
+        userData.status = "pending";
+      }
+
+      // const userInfoWithTimeStamps = {
+      //   ...userInfo,
+      //   createdAt: timeStamp,
+      //   updatedAt: timeStamp,
+      //   status: "pending",
+      // };
+      const result = await usersCollection.insertOne(userData);
       res.send(result);
     });
     app.patch("/users/suspend/:id", async (req, res) => {
@@ -53,6 +68,32 @@ async function run() {
       const query = { _id: new ObjectId(id) };
       const updateDoc = {
         $set: updateInfo,
+      };
+      const result = await usersCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+    app.patch("/users/approveRole/:id", async (req, res) => {
+      const id = req.params.id;
+
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          role: "manager",
+          status: "approved",
+        },
+      };
+      const result = await usersCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+    app.patch("/users/updateRole/:id", async (req, res) => {
+      const id = req.params.id;
+
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          role: "manager",
+          status: "approved",
+        },
       };
       const result = await usersCollection.updateOne(query, updateDoc);
       res.send(result);
@@ -134,17 +175,27 @@ async function run() {
     // orders apis
 
     app.get("/orders", async (req, res) => {
-      const { status } = req.query;
+      const { status, email } = req.query;
 
-      const query = status ? { status } : {};
+      //const query = status ? { status } : {};
+      const query = {};
+      if (status) {
+        query.status = status;
+      }
+
+      if (email) {
+        query.email = email;
+      }
 
       const orders = await ordersCollection.find(query).toArray();
       res.send(orders);
     });
+
     app.patch("/orders/:id", async (req, res) => {
       const id = req.params.id;
       const { status } = req.body;
       const query = { _id: new ObjectId(id) };
+
       const updateDoc = {
         $set: {
           status: status,
@@ -159,14 +210,37 @@ async function run() {
       const result = await ordersCollection.updateOne(query, updateDoc);
       res.send(result);
     });
+
+    app.patch("/orders/cancel/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+
+      const order = await ordersCollection.findOne(query);
+      if (!order) return res.status(404).send({ message: "Order not found" });
+
+      if (order.status !== "pending") {
+        return res
+          .status(400)
+          .send({ message: "Only pending orders can be canceled" });
+      }
+
+      const result = await ordersCollection.updateOne(query, {
+        $set: {
+          status: "canceled",
+          canceledAt: new Date(),
+        },
+      });
+
+      res.send(result);
+    });
+
     app.post("/orders", async (req, res) => {
       const userInfo = req.body;
       userInfo.createdAt = new Date();
       userInfo.status = "pending";
 
-      // check if product exists
       const existing = await productCollection.findOne({
-        title: userInfo._id, // আপনি যে ফিল্ডটি unique রাখতে চান
+        title: userInfo._id,
       });
 
       if (existing) {
