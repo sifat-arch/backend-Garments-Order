@@ -64,7 +64,13 @@ async function run() {
 
     // products apis
     app.get("/products", async (req, res) => {
-      const result = await productCollection.find().toArray();
+      const searchText = req.query.searchText;
+      console.log(searchText);
+      const query = {};
+      if (searchText) {
+        query.productTitle = { $regex: searchText, $options: "i" };
+      }
+      const result = await productCollection.find(query).toArray();
       res.send(result);
     });
     app.get("/products/:id", async (req, res) => {
@@ -73,14 +79,75 @@ async function run() {
       const result = await productCollection.findOne(query);
       res.send(result);
     });
+    app.post("/products", async (req, res) => {
+      const productInfo = req.body;
+
+      const result = await productCollection.insertOne(productInfo);
+      res.send(result);
+    });
+    app.patch("/products/:id", async (req, res) => {
+      const id = req.params.id;
+
+      const updateData = req.body;
+      console.log(updateData);
+
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: updateData,
+      };
+      const result = await productCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+
+    app.patch("/products/home-toggle/:id", async (req, res) => {
+      const id = req.params.id;
+      const { showOnHome } = req.body;
+
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: { showOnHome: showOnHome },
+      };
+
+      const result = await productCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+
+    app.delete("/products/:id", async (req, res) => {
+      const id = req.params.id;
+
+      const query = { _id: new ObjectId(id) };
+
+      const result = await productCollection.deleteOne(query);
+      res.send(result);
+    });
 
     // orders apis
 
-    app.get("/products", async (req, res) => {
-      const userInfo = req.body;
+    app.get("/orders", async (req, res) => {
+      const { status } = req.query;
 
-      const user = await usersCollection.findOne({ email: userInfo.email });
-      const userId = user._id;
+      const query = status ? { status } : {};
+
+      const orders = await ordersCollection.find(query).toArray();
+      res.send(orders);
+    });
+    app.patch("/orders/:id", async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          status: status,
+        },
+      };
+
+      // Extra field: Date & time store
+      if (status === "approved") {
+        updateDoc.$set.approvedAt = new Date();
+      }
+
+      const result = await ordersCollection.updateOne(query, updateDoc);
+      res.send(result);
     });
     app.post("/orders", async (req, res) => {
       const userInfo = req.body;
@@ -164,26 +231,26 @@ async function run() {
 
       if (session.payment_status === "paid") {
         // stripe metadata
-        const { productId, email, orderQuantity, orderPrice } =
+        const { productId, email, orderQuantity, orderPrice, product } =
           session.metadata;
 
         // 1. Create Order Object
         const orderData = {
           productId,
           email,
+          product,
           orderQuantity: parseInt(orderQuantity),
           orderPrice: parseFloat(orderPrice),
           paymentMethod: "op",
           paymentStatus: "paid",
+          status: "pending",
           createdAt: new Date(),
         };
 
         // check if product exists
         const existing = await ordersCollection.findOne({
-          productId: productId, // আপনি যে ফিল্ডটি unique রাখতে চান
+          _id: new ObjectId(_id), // আপনি যে ফিল্ডটি unique রাখতে চান
         });
-
-        console.log(existing, email, productId);
 
         if (existing) {
           console.log(existing);
@@ -193,6 +260,8 @@ async function run() {
             message: "Product already exists",
           });
         }
+
+        console.log("my order data", orderData);
 
         // 2. Save to Orders Collection
         const orderResult = await ordersCollection.insertOne(orderData);
