@@ -270,6 +270,15 @@ async function run() {
       }
 
       const result = await ordersCollection.insertOne(userInfo);
+      // Auto tracking for COD
+      const trackingData = {
+        orderId: result.insertedId,
+        status: "order placed",
+        note: "COD order created",
+        dateTime: new Date(),
+      };
+
+      await trackingsCollections.insertOne(trackingData);
       res.send(result);
     });
 
