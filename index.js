@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const { log } = require("node:console");
+const { userInfo } = require("node:os");
 require("dotenv").config();
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
 
@@ -87,19 +88,24 @@ async function run() {
     });
     app.patch("/users/updateRole/:id", async (req, res) => {
       const id = req.params.id;
-
+      const updateInfo = req.body;
       const query = { _id: new ObjectId(id) };
+      console.log(id, userInfo);
       const updateDoc = {
         $set: {
-          role: "manager",
-          status: "approved",
+          role: updateInfo.r,
         },
       };
       const result = await usersCollection.updateOne(query, updateDoc);
       res.send(result);
     });
     app.get("/users", async (req, res) => {
-      const result = await usersCollection.find().toArray();
+      const searchText = req.query.searchText;
+      const query = {};
+      if (searchText) {
+        query.name = { $regex: searchText, $options: "i" };
+      }
+      const result = await usersCollection.find(query).toArray();
       res.send(result);
     });
     app.get("/users/myProfile", async (req, res) => {
@@ -238,9 +244,10 @@ async function run() {
       const userInfo = req.body;
       userInfo.createdAt = new Date();
       userInfo.status = "pending";
+      console.log("info", userInfo);
 
-      const existing = await productCollection.findOne({
-        title: userInfo._id,
+      const existing = await ordersCollection.findOne({
+        title: userInfo.productId,
       });
 
       if (existing) {
@@ -331,17 +338,15 @@ async function run() {
           createdAt: new Date(),
         };
 
-        // check if product exists
         const existing = await ordersCollection.findOne({
-          _id: new ObjectId(_id), // আপনি যে ফিল্ডটি unique রাখতে চান
+          productId: productId,
         });
 
         if (existing) {
           console.log(existing);
-
           return res.status(409).send({
             success: false,
-            message: "Product already exists",
+            message: "You have already ordered this product",
           });
         }
 
