@@ -212,6 +212,15 @@ async function run() {
       const { status } = req.body;
       const query = { _id: new ObjectId(id) };
 
+      // Suppose manager updates order status to "approved"
+      const trackingData = {
+        orderId: new ObjectId(id),
+        status: status,
+        note: `Order ${status} by manager0`,
+        dateTime: new Date(),
+      };
+      await trackingsCollections.insertOne(trackingData);
+
       const updateDoc = {
         $set: {
           status: status,
@@ -303,6 +312,7 @@ async function run() {
         metadata: {
           productId: paymentInfo.productId,
           email: paymentInfo.email,
+          user: paymentInfo.user,
           orderQuantity: paymentInfo.orderQuantity,
           orderPrice: paymentInfo.orderPrice,
         },
@@ -321,7 +331,7 @@ async function run() {
 
       if (session.payment_status === "paid") {
         // stripe metadata
-        const { productId, email, orderQuantity, orderPrice } =
+        const { productId, email, user, orderQuantity, orderPrice } =
           session.metadata;
 
         const product = await productCollection.findOne({
@@ -331,7 +341,8 @@ async function run() {
         const orderData = {
           productId,
           email,
-          product,
+          user,
+          product: product.productTitle,
           orderQuantity: parseInt(orderQuantity),
           orderPrice: parseFloat(orderPrice),
           paymentMethod: "op",
@@ -359,7 +370,7 @@ async function run() {
 
         // 3. Create Tracking automatically (Payment Success)
         const trackingData = {
-          orderId: orderResult.orderId,
+          orderId: orderResult.insertedId,
           status: "payment success", // First tracking step
           note: "Stripe payment completed",
           dateTime: new Date(),
@@ -384,6 +395,8 @@ async function run() {
           .send({ success: false, message: "Payment not completed" });
       }
     });
+
+    
 
     await client.db("admin").command({ ping: 1 });
     console.log(
