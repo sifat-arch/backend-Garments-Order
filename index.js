@@ -32,6 +32,7 @@ async function run() {
     const usersCollection = db.collection("users");
     const productCollection = db.collection("products");
     const ordersCollection = db.collection("orders");
+    const trackingsCollections = db.collection("trackings");
 
     // app api here
     // users apis
@@ -130,12 +131,21 @@ async function run() {
       const result = await productCollection.find(query).toArray();
       res.send(result);
     });
+    app.get("/products/home", async (req, res) => {
+      const products = await productCollection
+        .find({ showOnHome: true })
+        .toArray();
+      console.log(products);
+
+      res.send(products);
+    });
     app.get("/products/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await productCollection.findOne(query);
       res.send(result);
     });
+
     app.post("/products", async (req, res) => {
       const productInfo = req.body;
 
@@ -295,26 +305,6 @@ async function run() {
       res.send({ url: session.url });
     });
 
-    // retrive payment info
-
-    // app.patch("/payment-success", async (req, res) => {
-    //   const sessionId = req.query.session_id;
-    //   const session = await stripe.checkout.sessions.retrieve(sessionId);
-    //   console.log(session);
-    //   if (session.payment_status === "paid") {
-    //     const id = session.metadata.productId;
-    //     const query = { _id: new ObjectId(id) };
-    //     const updateDoc = {
-    //       $set: {
-    //         paymentStatus: "paid",
-    //       },
-    //     };
-
-    //     const result = await productCollection.updateOne(query, updateDoc);
-    //     res.send(result);
-    //   }
-    // });
-
     app.patch("/payment-success", async (req, res) => {
       const sessionId = req.query.session_id;
 
@@ -322,9 +312,12 @@ async function run() {
 
       if (session.payment_status === "paid") {
         // stripe metadata
-        const { productId, email, orderQuantity, orderPrice, product } =
+        const { productId, email, orderQuantity, orderPrice } =
           session.metadata;
 
+        const product = await productCollection.findOne({
+          _id: new ObjectId(productId),
+        });
         // 1. Create Order Object
         const orderData = {
           productId,
@@ -354,6 +347,16 @@ async function run() {
 
         // 2. Save to Orders Collection
         const orderResult = await ordersCollection.insertOne(orderData);
+
+        // 3. Create Tracking automatically (Payment Success)
+        const trackingData = {
+          orderId: orderResult.orderId,
+          status: "payment success", // First tracking step
+          note: "Stripe payment completed",
+          dateTime: new Date(),
+        };
+
+        await trackingsCollections.insertOne(trackingData);
 
         // 3. (Optional) Update product collection
         await productCollection.updateOne(
