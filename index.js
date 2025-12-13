@@ -9,8 +9,38 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET);
 const app = express();
 const PORT = 3000;
 
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./firebas-admin-sdk.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+// middleware
 app.use(express.json());
 app.use(cors());
+
+const verifyFBToken = async (req, res, next) => {
+  const token = req.headers.authorization;
+  console.log("i am in", token);
+
+  if (!token) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+
+  console.log("i am out", token);
+  try {
+    const idToken = token.split(" ")[1];
+
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    console.log("decoded in the token", decoded);
+    req.decoded_email = decoded.email;
+    next();
+  } catch (err) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+};
 
 // MongoDB URI
 const uri = process.env.DB_URI;
@@ -33,6 +63,19 @@ async function run() {
     const productCollection = db.collection("products");
     const ordersCollection = db.collection("orders");
     const trackingsCollections = db.collection("trackings");
+
+    // must be used after verifyFBToken middleware
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+
+      if (!user || user.role !== "admin") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+
+      next();
+    };
 
     // app api here
     // users apis
@@ -91,10 +134,10 @@ async function run() {
       const id = req.params.id;
       const updateInfo = req.body;
       const query = { _id: new ObjectId(id) };
-      console.log(id, userInfo);
+
       const updateDoc = {
         $set: {
-          role: updateInfo.r,
+          role: updateInfo,
         },
       };
       const result = await usersCollection.updateOne(query, updateDoc);
@@ -119,11 +162,40 @@ async function run() {
       const result = await usersCollection.findOne(query);
       res.send(result);
     });
+    app.get("/users/:email/role", verifyFBToken, async (req, res) => {
+      const email = req.params.email;
+
+      const query = { email };
+
+      const user = await usersCollection.findOne(query);
+
+      res.send({ role: user?.role || "user" });
+    });
+
+    app.get("/userFilter", async (req, res) => {
+      try {
+        const { status } = req.query;
+        console.log(status, "status");
+
+        const query = {};
+
+        if (status && status !== "all") {
+          query.status = status; // ✅ exact match
+        }
+
+        const result = await usersCollection.find(query).toArray();
+        console.log(result);
+        res.send(result);
+      } catch (error) {
+        console.error("User filter error:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
 
     // products apis
     app.get("/products", async (req, res) => {
       const searchText = req.query.searchText;
-      console.log(searchText);
+
       const query = {};
       if (searchText) {
         query.productTitle = { $regex: searchText, $options: "i" };
@@ -131,15 +203,34 @@ async function run() {
       const result = await productCollection.find(query).toArray();
       res.send(result);
     });
+    app.get("/productsAll", async (req, res) => {
+      const { limit = 0, skip = 0 } = req.query;
+
+      const result = await productCollection
+        .find()
+        .limit(Number(limit))
+        .skip(Number(skip))
+        .project({
+          paymentStatus: 0,
+          showOnHome: 0,
+          paymentOptions: 0,
+          description: 0,
+          managerEmail: 0,
+        })
+        .toArray();
+
+      const count = await productCollection.countDocuments();
+      res.send({ result, total: count });
+    });
     app.get("/products/home", async (req, res) => {
       const products = await productCollection
         .find({ showOnHome: true })
+        .limit(6)
         .toArray();
-      console.log(products);
 
       res.send(products);
     });
-    app.get("/products/:id", async (req, res) => {
+    app.get("/products/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await productCollection.findOne(query);
@@ -152,11 +243,10 @@ async function run() {
       const result = await productCollection.insertOne(productInfo);
       res.send(result);
     });
-    app.patch("/products/:id", async (req, res) => {
+    app.patch("/products/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
 
       const updateData = req.body;
-      console.log(updateData);
 
       const query = { _id: new ObjectId(id) };
       const updateDoc = {
@@ -166,7 +256,9 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/products/home-toggle/:id", async (req, res) => {
+    // ***********
+
+    app.patch("/products/home-toggle/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       const { showOnHome } = req.body;
 
@@ -179,7 +271,7 @@ async function run() {
       res.send(result);
     });
 
-    app.delete("/products/:id", async (req, res) => {
+    app.delete("/products/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
 
       const query = { _id: new ObjectId(id) };
@@ -190,33 +282,79 @@ async function run() {
 
     // orders apis
 
-    app.get("/orders", async (req, res) => {
-      const { status, email } = req.query;
+    app.get(
+      "/orders",
+      verifyFBToken,
+      async (req, res, next) => {
+        const token = req.headers.authorization;
 
-      //const query = status ? { status } : {};
+        // if (!token) {
+        //   return res.status(401).send({ message: "unauthorized access" });
+        // }
+
+        try {
+          const idToken = token.split(" ")[1];
+          const decoded = await admin.auth().verifyIdToken(idToken);
+          // console.log("decoded in the token", decoded);
+          req.decoded_email = decoded.email;
+          next();
+        } catch (err) {
+          return res.status(401).send({ message: "unauthorized access" });
+        }
+      },
+      async (req, res) => {
+        const { status, email } = req.query;
+
+        //const query = status ? { status } : {};
+        const query = {};
+        if (status) {
+          query.status = status;
+        }
+
+        if (email) {
+          query.email = email;
+        }
+
+        const orders = await ordersCollection.find(query).toArray();
+
+        res.send(orders);
+      }
+    );
+
+    app.get("/searchOrders", async (req, res) => {
+      const searchText = req.query.searchText;
       const query = {};
-      if (status) {
-        query.status = status;
+      if (!searchText || !searchText.trim()) {
+        return res.send([]);
       }
-
-      if (email) {
-        query.email = email;
+      if (searchText) {
+        query.productTitle = { $regex: searchText, $options: "i" };
       }
-
-      const orders = await ordersCollection.find(query).toArray();
-      res.send(orders);
+      const result = await ordersCollection.find(query).toArray();
+      res.send(result);
     });
 
-    app.patch("/orders/:id", async (req, res) => {
+    app.patch("/orders/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       const { status } = req.body;
       const query = { _id: new ObjectId(id) };
 
       // Suppose manager updates order status to "approved"
+      // const trackingQuery = { orderId: new ObjectId(id) };
+      // const product = await trackingsCollections.findOne(trackingQuery);
+      // console.log("product", product);
+      // if (product.status === "approved" || product.status === "rejected") {
+      //   return res
+      //     .status(400)
+      //     .send({ message: "This order is already finalized" });
+      // }
+
+      // console.log("patched");
+
       const trackingData = {
         orderId: new ObjectId(id),
         status: status,
-        note: `Order ${status} by manager0`,
+        note: `Order ${status} by manager`,
         dateTime: new Date(),
       };
       await trackingsCollections.insertOne(trackingData);
@@ -236,7 +374,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/orders/cancel/:id", async (req, res) => {
+    app.patch("/orders/cancel/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
 
@@ -259,25 +397,31 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/orders", async (req, res) => {
+    app.post("/orders", verifyFBToken, async (req, res) => {
       const userInfo = req.body;
       userInfo.createdAt = new Date();
       userInfo.status = "pending";
-      console.log("info", userInfo);
 
       const existing = await ordersCollection.findOne({
         title: userInfo.productId,
       });
 
       if (existing) {
-        console.log(existing);
-
         return res.status(409).send({
           success: false,
           message: "Product already exists",
         });
       }
 
+      const user = await usersCollection.findOne({ email });
+
+      // *************
+
+      if (user.status === "suspended") {
+        return res.status(403).send({
+          message: "Your account is suspended. You cannot place new orders.",
+        });
+      }
       const result = await ordersCollection.insertOne(userInfo);
       // Auto tracking for COD
       const trackingData = {
@@ -342,7 +486,7 @@ async function run() {
           productId,
           email,
           user,
-          product: product.productTitle,
+          productTitle: product.productTitle,
           orderQuantity: parseInt(orderQuantity),
           orderPrice: parseFloat(orderPrice),
           paymentMethod: "op",
@@ -356,14 +500,11 @@ async function run() {
         });
 
         if (existing) {
-          console.log(existing);
           return res.status(409).send({
             success: false,
             message: "You have already ordered this product",
           });
         }
-
-        console.log("my order data", orderData);
 
         // 2. Save to Orders Collection
         const orderResult = await ordersCollection.insertOne(orderData);
@@ -396,7 +537,23 @@ async function run() {
       }
     });
 
-    
+    // trackings related apis
+
+    app.post("/trackings", verifyFBToken, async (req, res) => {
+      const trackingInfo = req.body;
+      trackingInfo.orderId = new ObjectId(trackingInfo.orderId);
+      const result = await trackingsCollections.insertOne(trackingInfo);
+
+      res.send(result);
+    });
+    app.get("/trackings/:id", verifyFBToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { orderId: new ObjectId(id) };
+
+      const result = await trackingsCollections.find(query).toArray();
+
+      res.send(result);
+    });
 
     await client.db("admin").command({ ping: 1 });
     console.log(
