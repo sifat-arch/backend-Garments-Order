@@ -11,7 +11,14 @@ const PORT = 3000;
 
 const admin = require("firebase-admin");
 
-const serviceAccount = require("./firebas-admin-sdk.json");
+//const serviceAccount = require("./firebas-admin-sdk.json");
+
+// const serviceAccount = require("./firebase-admin-key.json");
+
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
+  "utf8"
+);
+const serviceAccount = JSON.parse(decoded);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -23,18 +30,16 @@ app.use(cors());
 
 const verifyFBToken = async (req, res, next) => {
   const token = req.headers.authorization;
-  console.log("i am in", token);
 
   if (!token) {
     return res.status(401).send({ message: "unauthorized access" });
   }
 
-  console.log("i am out", token);
   try {
     const idToken = token.split(" ")[1];
 
     const decoded = await admin.auth().verifyIdToken(idToken);
-    console.log("decoded in the token", decoded);
+
     req.decoded_email = decoded.email;
     next();
   } catch (err) {
@@ -56,7 +61,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
     // add collections here
     const db = client.db("garments-orders");
     const usersCollection = db.collection("users");
@@ -184,11 +189,16 @@ async function run() {
     // products apis
     app.get("/products", async (req, res) => {
       const searchText = req.query.searchText;
+      const { email } = req.query;
 
       const query = {};
+      if (email) {
+        query.managersEmail = email;
+      }
       if (searchText) {
         query.productTitle = { $regex: searchText, $options: "i" };
       }
+
       const result = await productCollection.find(query).toArray();
       res.send(result);
     });
@@ -269,33 +279,40 @@ async function run() {
       res.send(result);
     });
 
-    // orders apis
-
-    app.get(
-      "/orders",
-      verifyFBToken,
-      async (req, res, next) => {
-        const token = req.headers.authorization;
-
-        // if (!token) {
-        //   return res.status(401).send({ message: "unauthorized access" });
-        // }
-
-        try {
-          const idToken = token.split(" ")[1];
-          const decoded = await admin.auth().verifyIdToken(idToken);
-          // console.log("decoded in the token", decoded);
-          req.decoded_email = decoded.email;
-          next();
-        } catch (err) {
-          return res.status(401).send({ message: "unauthorized access" });
-        }
-      },
-      async (req, res) => {
+    app.get("/orders", async (req, res) => {
+      try {
         const { status, email } = req.query;
 
-        //const query = status ? { status } : {};
         const query = {};
+
+        if (status) {
+          query.status = status;
+        }
+
+        if (email) {
+          query.managersEmail = email;
+        }
+
+        const orders = await ordersCollection
+          .find(query)
+          .sort({ createdAt: -1 }) // latest first (optional)
+          .toArray();
+
+        res.send(orders);
+      } catch (error) {
+        console.error("Error fetching orders:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch orders",
+        });
+      }
+    });
+    app.get("/ordersBuyer", async (req, res) => {
+      try {
+        const { status, email } = req.query;
+
+        const query = {};
+
         if (status) {
           query.status = status;
         }
@@ -304,11 +321,20 @@ async function run() {
           query.email = email;
         }
 
-        const orders = await ordersCollection.find(query).toArray();
+        const orders = await ordersCollection
+          .find(query)
+          .sort({ createdAt: -1 }) // latest first (optional)
+          .toArray();
 
         res.send(orders);
+      } catch (error) {
+        console.error("Error fetching orders:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch orders",
+        });
       }
-    );
+    });
 
     app.get("/orders/:id", async (req, res) => {
       const id = req.params.id;
@@ -474,6 +500,7 @@ async function run() {
           email,
           user,
           productTitle: product.productTitle,
+          managersEmail: product.managersEmail,
           orderQuantity: parseInt(orderQuantity),
           orderPrice: parseFloat(orderPrice),
           paymentMethod: "op",
@@ -484,9 +511,11 @@ async function run() {
 
         const existing = await ordersCollection.findOne({
           productId: productId,
+          email: email,
         });
 
         if (existing) {
+          console.log("productId is existing");
           return res.status(409).send({
             success: false,
             message: "You have already ordered this product",
@@ -542,10 +571,10 @@ async function run() {
       res.send(result);
     });
 
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Optionally close connection later
     // await client.close();

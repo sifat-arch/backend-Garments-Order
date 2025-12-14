@@ -1,3 +1,4 @@
 .env
 node_modules
 firebas-admin-sdk.json
+.vercel
