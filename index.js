@@ -64,22 +64,8 @@ async function run() {
     const ordersCollection = db.collection("orders");
     const trackingsCollections = db.collection("trackings");
 
-    // must be used after verifyFBToken middleware
-    const verifyAdmin = async (req, res, next) => {
-      const email = req.decoded_email;
-      const query = { email };
-      const user = await usersCollection.findOne(query);
-
-      if (!user || user.role !== "admin") {
-        return res.status(403).send({ message: "forbidden access" });
-      }
-
-      next();
-    };
-
-    // app api here
     // users apis
-    app.post("/users", async (req, res) => {
+    app.post("/users", verifyFBToken, async (req, res) => {
       const { name, email, photoURL, role } = req.body;
       const timeStamp = new Date();
 
@@ -98,25 +84,24 @@ async function run() {
         userData.status = "pending";
       }
 
-      // const userInfoWithTimeStamps = {
-      //   ...userInfo,
-      //   createdAt: timeStamp,
-      //   updatedAt: timeStamp,
-      //   status: "pending",
-      // };
       const result = await usersCollection.insertOne(userData);
       res.send(result);
     });
-    app.patch("/users/suspend/:id", async (req, res) => {
-      const id = req.params.id;
-      const updateInfo = req.body;
-      const query = { _id: new ObjectId(id) };
-      const updateDoc = {
-        $set: updateInfo,
-      };
-      const result = await usersCollection.updateOne(query, updateDoc);
-      res.send(result);
-    });
+    app.patch(
+      "/users/suspend/:id",
+      verifyFBToken,
+
+      async (req, res) => {
+        const id = req.params.id;
+        const updateInfo = req.body;
+        const query = { _id: new ObjectId(id) };
+        const updateDoc = {
+          $set: updateInfo,
+        };
+        const result = await usersCollection.updateOne(query, updateDoc);
+        res.send(result);
+      }
+    );
     app.patch("/users/approveRole/:id", async (req, res) => {
       const id = req.params.id;
 
@@ -130,7 +115,7 @@ async function run() {
       const result = await usersCollection.updateOne(query, updateDoc);
       res.send(result);
     });
-    app.patch("/users/updateRole/:id", async (req, res) => {
+    app.patch("/users/updateRole/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       const updateInfo = req.body;
       const query = { _id: new ObjectId(id) };
@@ -143,7 +128,7 @@ async function run() {
       const result = await usersCollection.updateOne(query, updateDoc);
       res.send(result);
     });
-    app.get("/users", async (req, res) => {
+    app.get("/users", verifyFBToken, async (req, res) => {
       const searchText = req.query.searchText;
       const query = {};
       if (searchText) {
@@ -152,7 +137,7 @@ async function run() {
       const result = await usersCollection.find(query).toArray();
       res.send(result);
     });
-    app.get("/users/myProfile", async (req, res) => {
+    app.get("/users/myProfile", verifyFBToken, async (req, res) => {
       const email = req.query.email;
 
       const query = {};
@@ -162,20 +147,24 @@ async function run() {
       const result = await usersCollection.findOne(query);
       res.send(result);
     });
-    app.get("/users/:email/role", verifyFBToken, async (req, res) => {
-      const email = req.params.email;
+    app.get(
+      "/users/:email/role",
+      verifyFBToken,
 
-      const query = { email };
+      async (req, res) => {
+        const email = req.params.email;
 
-      const user = await usersCollection.findOne(query);
+        const query = { email };
 
-      res.send({ role: user?.role || "user" });
-    });
+        const user = await usersCollection.findOne(query);
+
+        res.send({ role: user?.role || "user" });
+      }
+    );
 
     app.get("/userFilter", async (req, res) => {
       try {
         const { status } = req.query;
-        console.log(status, "status");
 
         const query = {};
 
@@ -184,7 +173,7 @@ async function run() {
         }
 
         const result = await usersCollection.find(query).toArray();
-        console.log(result);
+
         res.send(result);
       } catch (error) {
         console.error("User filter error:", error);
@@ -321,6 +310,14 @@ async function run() {
       }
     );
 
+    app.get("/orders/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+
+      const result = await ordersCollection.findOne(query);
+      res.send(result);
+    });
+
     app.get("/searchOrders", async (req, res) => {
       const searchText = req.query.searchText;
       const query = {};
@@ -338,18 +335,6 @@ async function run() {
       const id = req.params.id;
       const { status } = req.body;
       const query = { _id: new ObjectId(id) };
-
-      // Suppose manager updates order status to "approved"
-      // const trackingQuery = { orderId: new ObjectId(id) };
-      // const product = await trackingsCollections.findOne(trackingQuery);
-      // console.log("product", product);
-      // if (product.status === "approved" || product.status === "rejected") {
-      //   return res
-      //     .status(400)
-      //     .send({ message: "This order is already finalized" });
-      // }
-
-      // console.log("patched");
 
       const trackingData = {
         orderId: new ObjectId(id),
@@ -399,6 +384,7 @@ async function run() {
 
     app.post("/orders", verifyFBToken, async (req, res) => {
       const userInfo = req.body;
+
       userInfo.createdAt = new Date();
       userInfo.status = "pending";
 
@@ -412,8 +398,9 @@ async function run() {
           message: "Product already exists",
         });
       }
+      const query = { email: userInfo.email };
 
-      const user = await usersCollection.findOne({ email });
+      const user = await usersCollection.findOne(query);
 
       // *************
 
